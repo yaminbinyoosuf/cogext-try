@@ -1,6 +1,6 @@
 {
   "name": "cogext-try",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP observer that catches AI agents lying about tool success.",
   "type": "module",
   "bin": {
@@ -10,7 +10,13 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "files": [
     "dist",

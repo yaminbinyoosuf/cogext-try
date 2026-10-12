@@ -4,7 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { sendEmail, writeFile, updateDb, postSlack } from './tools.js';
 import { renderFrame, renderCompact } from './frame.js';
-import { createSession, logEvent, getSessionId, getLiveUrl } from './session.js';
+import { createSession, logEvent, publishIfEnabled, getSessionId, getLiveUrl, isStreaming, isPublishEnabled } from './session.js';
 import { extractClaim } from './observer.js';
 const lastCalls = [];
 const MAX_HISTORY = 20;
@@ -46,10 +46,17 @@ Add to Claude Code MCP config. Either block works.
 
 Then restart Claude Code. Ask it to send an email, write a file, update a row
 or post to Slack, and watch this terminal for the mismatch frames.
+
+Publishing is off by default. To publish the session to cogextai.com/square
+after the first catch, add an env block to the config above:
+
+      "env": { "COGEXT_TRY_PUBLISH": "1" }
+
+To send nothing to cogextai.com at all, use "COGEXT_TRY_LOCAL": "1" instead.
 `);
     process.exit(0);
 }
-const server = new Server({ name: 'cogext-try', version: '0.1.0' }, { capabilities: { tools: {} } });
+const server = new Server({ name: 'cogext-try', version: '0.1.1' }, { capabilities: { tools: {} } });
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: [
         { name: 'send_email', description: 'Send an email.', inputSchema: { type: 'object', properties: { to: { type: 'string' }, subject: { type: 'string' }, body: { type: 'string' } }, required: ['to', 'subject'] } },
@@ -98,9 +105,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     lastCalls.unshift({ tool: name, args, result, timestamp });
     if (lastCalls.length > MAX_HISTORY)
         lastCalls.pop();
-    await logEvent({ kind: 'tool_call', tool: name, args, result, timestamp });
-    if (result.status === 'failure')
+    const caught = result.status === 'failure';
+    await logEvent({ kind: 'tool_call', tool: name, args, result, timestamp }, { catch: caught });
+    if (caught) {
         reportCatch(timestamp, name, args, result);
+        await publishIfEnabled();
+    }
     return { content: [{ type: 'text', text: JSON.stringify(result.body) }] };
 });
 async function main() {
@@ -109,7 +119,18 @@ async function main() {
     await server.connect(transport);
     process.stderr.write('\nCOGEXT-try observer running.\n');
     process.stderr.write('Session: ' + getSessionId() + '\n');
-    process.stderr.write('Live URL: ' + getLiveUrl() + '\n\n');
+    if (process.env.COGEXT_TRY_LOCAL === '1') {
+        process.stderr.write('Live streaming: off (COGEXT_TRY_LOCAL=1)\n\n');
+        return;
+    }
+    if (!isStreaming()) {
+        process.stderr.write('Live streaming: off (see the message above). Nothing will be published.\n\n');
+        return;
+    }
+    process.stderr.write('Live URL: ' + getLiveUrl() + '  (unlisted; anyone with the link can view it)\n');
+    process.stderr.write(isPublishEnabled()
+        ? 'Publishing: on. The first catch publishes this session to cogextai.com/square.\n\n'
+        : 'Publishing: off. Set COGEXT_TRY_PUBLISH=1 to publish this session to cogextai.com/square.\n\n');
 }
 main().catch((err) => {
     process.stderr.write('cogext-try failed: ' + err.message + '\n');
